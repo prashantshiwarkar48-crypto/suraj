@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Voice Controlled 3D Humanoid Avatar</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0b1020;
+      color: #e9eefc;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      min-height: 100vh;
+    }
+    #app { position: relative; }
+    #hud {
+      padding: 12px 16px;
+      background: #111a33;
+      border-top: 1px solid #22315e;
+      display: grid;
+      gap: 8px;
+    }
+    #status { font-size: 14px; color: #9fb2ea; }
+    #commands { font-size: 13px; color: #b9c7f3; }
+    #captured {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 220px;
+      border: 2px solid #314480;
+      border-radius: 10px;
+      background: #081022;
+      display: none;
+    }
+    #captured.show { display: block; }
+    #controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #3658d6;
+      border: 0;
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button:hover { background: #4b6df0; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <img id="captured" alt="Captured from webcam" />
+  </div>
+  <div id="hud">
+    <div id="status">Loading avatar...</div>
+    <div id="commands">
+      Say: "hi", "sit down", "walk", "play song", "capture my image".
+    </div>
+    <div id="controls">
+      <button id="startBtn">Start Voice Listening</button>
+      <button id="captureBtn">Capture My Image</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.160.1/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.160.1/examples/jsm/controls/OrbitControls.js';
+
+    const app = document.getElementById('app');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const capturedImg = document.getElementById('captured');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b1020);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / (window.innerHeight - 130), 0.1, 100);
+    camera.position.set(0, 1.6, 3.4);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight - 130);
+    app.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1, 0);
+    controls.update();
+
+    scene.add(new THREE.HemisphereLight(0x99aaff, 0x223366, 1.5));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.4);
+    dir.position.set(2.5, 5, 2);
+    scene.add(dir);
+
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(5, 64),
+      new THREE.MeshStandardMaterial({ color: 0x172548 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.01;
+    scene.add(floor);
+
+    const clock = new THREE.Clock();
+    const loader = new GLTFLoader();
+    let mixer;
+    let activeAction;
+    const actions = {};
+
+    const MODEL_URL = 'https://threejs.org/examples/models/gltf/RobotExpressive/RobotExpressive.glb';
+    loader.load(MODEL_URL, (gltf) => {
+      const avatar = gltf.scene;
+      avatar.scale.set(0.6, 0.6, 0.6);
+      scene.add(avatar);
+
+      mixer = new THREE.AnimationMixer(avatar);
+      for (const clip of gltf.animations) {
+        actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
+      }
+
+      playAnimation('idle');
+      statusEl.textContent = 'Avatar ready. Click "Start Voice Listening" and speak.';
+    }, undefined, (err) => {
+      statusEl.textContent = 'Failed to load avatar model.';
+      console.error(err);
+    });
+
+    function playAnimation(name) {
+      if (!mixer) return;
+      const action = actions[name.toLowerCase()];
+      if (!action) return;
+
+      if (activeAction && activeAction !== action) {
+        activeAction.fadeOut(0.25);
+      }
+      action.reset().fadeIn(0.25).play();
+      activeAction = action;
+    }
+
+    function speak(text) {
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 1;
+      utter.pitch = 1;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utter);
+    }
+
+    const SONG_URL = 'https://cdn.pixabay.com/download/audio/2022/10/30/audio_5f5ea802fa.mp3?filename=lofi-study-112191.mp3';
+    const song = new Audio(SONG_URL);
+    song.crossOrigin = 'anonymous';
+
+    async function captureImage() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        await video.play();
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+
+        capturedImg.src = canvas.toDataURL('image/png');
+        capturedImg.classList.add('show');
+
+        stream.getTracks().forEach(track => track.stop());
+        speak('Image captured.');
+        statusEl.textContent = 'Image captured from webcam.';
+      } catch (error) {
+        statusEl.textContent = 'Webcam permission denied or unavailable.';
+        console.error(error);
+      }
+    }
+
+    function handleCommand(text) {
+      const command = text.toLowerCase();
+      statusEl.textContent = `Heard: ${command}`;
+
+      if (command.includes('hi')) {
+        playAnimation('wave');
+        speak('Hiii!');
+      } else if (command.includes('sit down') || command.includes('sit')) {
+        playAnimation('sitting');
+        speak('Okay, I am sitting down.');
+      } else if (command.includes('walk')) {
+        playAnimation('walking');
+        speak('Sure, I am walking.');
+      } else if (command.includes('play song')) {
+        song.play().catch(() => {
+          statusEl.textContent = 'Unable to autoplay song until user interacts.';
+        });
+        playAnimation('dance');
+        speak('Playing song now.');
+      } else if (command.includes('capture my image') || command.includes('capture image')) {
+        captureImage();
+      } else {
+        playAnimation('idle');
+      }
+    }
+
+    function startListening() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        statusEl.textContent = 'Speech recognition is not supported in this browser.';
+        return;
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.interimResults = false;
+      recognition.continuous = true;
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[event.results.length - 1][0].transcript;
+        handleCommand(transcript);
+      };
+
+      recognition.onerror = (event) => {
+        statusEl.textContent = `Recognition error: ${event.error}`;
+      };
+
+      recognition.onend = () => {
+        recognition.start();
+      };
+
+      recognition.start();
+      statusEl.textContent = 'Listening... Speak now.';
+    }
+
+    startBtn.addEventListener('click', () => {
+      startListening();
+      startBtn.disabled = true;
+    });
+
+    captureBtn.addEventListener('click', captureImage);
+
+    window.addEventListener('resize', () => {
+      const h = window.innerHeight - 130;
+      camera.aspect = window.innerWidth / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, h);
+    });
+
+    function renderLoop() {
+      requestAnimationFrame(renderLoop);
+      if (mixer) mixer.update(clock.getDelta());
+      renderer.render(scene, camera);
+    }
+    renderLoop();
+  </script>
+</body>
+</html>
